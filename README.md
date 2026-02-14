@@ -1,27 +1,26 @@
-# Arduino Uno Temperature Monitor & Alert System
+# Arduino Uno Smart NTC Temperature Monitor
 
-A compact, reliable temperature monitoring and alert system for the Arduino Uno using a DS18B20 digital temperature sensor, tri‑color status LEDs, a relay (fan / heater / exhaust), a buzzer, and an acknowledgment button. Designed to be easily extended (logging, displays, networking) while remaining well within the Uno’s resource limits.
+A physics-based temperature monitoring system for the Arduino Uno. Instead of relying on digital libraries, this project implements the **Steinhart-Hart equation** to mathematically calculate temperature from an NTC thermistor. It features status LEDs, a relay control for automation (fan/heater), a buzzer alarm, and an acknowledgment system.
 
 ---
 
 ## Table of Contents
-1. Overview  
-2. Features  
-3. Hardware Requirements  
-4. Wiring & Pin Map  
-5. Temperature Logic  
-6. Configuration  
-7. Build & Run  
-8. Provided Sketch  
-9. Testing Procedure  
-10. Improvement Opportunities  
-11. Safety Notes  
-12. License  
+1. Overview
+2. Features
+3. Hardware Requirements
+4. Wiring & Pin Map
+5. Temperature Logic
+6. Configuration
+7. Build & Run
+8. Provided Sketch
+9. Testing Procedure
+10. Improvement Opportunities
+11. License
 
 ---
 
 ## 1. Overview
-The system continuously samples temperature, displays status via LEDs, activates a relay and buzzer on threshold breaches, and enforces a cooldown to prevent alert spamming. A push button acknowledges (silences) an active alert. The default logic is suitable for enclosure, equipment bay, or ambient monitoring.
+This system uses an analog voltage divider circuit to read the resistance of an NTC thermistor. It applies the **Steinhart-Hart logarithmic equation** to convert that resistance into a precise temperature reading in Celsius. It continuously monitors the environment and activates visual (LED) and audible (Buzzer) alerts if thresholds are breached, triggering a relay for external cooling or heating.
 
 ---
 
@@ -29,46 +28,47 @@ The system continuously samples temperature, displays status via LEDs, activates
 
 | Feature | Description |
 |---------|-------------|
-| DS18B20 temperature sensing | Accurate digital Celsius readings (OneWire bus) |
-| Status visualization | Green (normal), Yellow (warning: below min or above max), Red (critical) |
-| Relay drive | Activates on alert (adjust policy as required) |
-| Audible buzzer | Pattern on new alert (3 pulses) |
-| Acknowledgment button | Silences buzzer; LEDs remain indicative |
-| Alert cooldown | Prevents repetitive buzzer retriggers (default 5 min) |
-| Serial diagnostics | Temperature + state logging @ 9600 baud |
-| Clear separation of thresholds | Minimum, maximum, and critical |
+| **Physics-Based Sensing** | Uses NTC Thermistor + Steinhart-Hart math (No heavy libraries) |
+| **Status Visualization** | Green (Normal), Yellow (Warning), Red (Critical) |
+| **Automated Control** | Relay activates on alert (Fan/Heater control) |
+| **Audible Alarm** | 3-pulse buzzer pattern on new alerts |
+| **Smart Acknowledgment** | Button press silences buzzer; system stays "Active" until safe |
+| **Alert Cooldown** | Prevents buzzer "spamming" (Default: 5 minutes) |
+| **Serial Diagnostics** | Real-time logging of Temperature (°C) and Resistance (Ω) |
 
 ---
 
-## 3. Hardware Requirements (Minimum)
+## 3. Hardware Requirements
 
-| Component | Notes |
-|-----------|-------|
+| Component | Specifications |
+|-----------|----------------|
 | Arduino Uno (ATmega328P) | Genuine or compatible |
-| DS18B20 sensor | TO‑92 or waterproof probe; requires 4.7 kΩ pull‑up |
-| 3 × LEDs + 3 × 220–330 Ω resistors | Green, Yellow, Red |
-| Relay module (5V) | Prefer opto‑isolated module; HIGH = active (verify yours) |
-| Active buzzer | Simple ON/OFF pattern |
-| Momentary push button | With internal pull‑up |
-| Jumper wires / breadboard | As needed |
-| USB cable / 5V supply | Stable power source |
-
-Optional expansions: I2C OLED, SD card module, Ethernet shield, ESP8266 bridge, enclosures, multiple DS18B20 sensors.
+| **NTC Thermistor** | 10kΩ or similar (Standard bead type) |
+| **Fixed Resistor** | **100kΩ** (Critical for the voltage divider math) |
+| 3 × LEDs | Red, Yellow, Green |
+| 3 × Resistors | 220Ω - 330Ω (For LEDs) |
+| Relay Module (5V) | Active HIGH configuration (Standard) |
+| Active Buzzer | 5V DC |
+| Push Button | Momentary switch |
+| Jumper Wires | M-M, M-F as needed |
 
 ---
 
-## 4. Wiring & Pin Map (Default)
+## 4. Wiring & Pin Map
 
-| Function | Arduino Pin | Direction | Notes |
-|----------|-------------|----------|-------|
-| DS18B20 Data | D2 | OneWire | 4.7 kΩ resistor between D2 and +5V |
-| Red LED (critical) | D3 | OUTPUT | Active HIGH |
-| Yellow LED (warning) | D4 | OUTPUT | Active HIGH |
-| Green LED (normal) | D5 | OUTPUT | Active HIGH |
+**Crucial Circuit Note:** The thermistor requires a voltage divider circuit.
+* **5V** -> Thermistor -> **A1** (Signal)
+* **A1** -> 100kΩ Resistor -> **GND**
+
+| Function | Arduino Pin | Type | Connection Notes |
+|----------|-------------|------|------------------|
+| **Thermistor Signal** | **A1** | Analog Input | Junction of Thermistor & 100k Resistor |
+| Red LED (Critical) | D3 | OUTPUT | Active HIGH |
+| Yellow LED (Warning) | D4 | OUTPUT | Active HIGH |
+| Green LED (Normal) | D5 | OUTPUT | Active HIGH |
 | Buzzer | D6 | OUTPUT | Active HIGH |
-| Relay | D7 | OUTPUT | Default LOW (inactive) |
-| Acknowledge button | D8 | INPUT_PULLUP | Press = LOW |
-| Serial (USB) | D0/D1 | UART | Do not repurpose |
+| Relay Control | D7 | OUTPUT | Active HIGH (Triggers fan/heater) |
+| Acknowledge Button | D8 | INPUT_PULLUP | Connect other leg to GND |
 
 ---
 
@@ -76,101 +76,108 @@ Optional expansions: I2C OLED, SD card module, Ethernet shield, ESP8266 bridge, 
 
 | State | Condition | LED | Relay | Buzzer |
 |-------|-----------|-----|-------|--------|
-| Normal | min_temp < T < max_temp | Green | OFF | OFF |
-| Warning (Low) | T ≤ min_temp | Yellow | OFF | Pulses on initial alert only |
-| Warning (High) | max_temp ≤ T < critical_temp | Yellow | OFF | Pulses on initial alert only |
-| Critical | T ≥ critical_temp | Red | ON | Pulses on initial alert only |
-| Acknowledged | Button pressed during alert | (Depends on T) | Follows policy (e.g., ON if critical) | OFF |
+| **Normal** | 18°C < T < 25°C | Green | OFF | OFF |
+| **Warning** | T ≤ 18°C OR T ≥ 25°C | Yellow | OFF | Pulses (Once) |
+| **Critical** | T ≥ 30°C | Red | ON | Pulses (Once) |
+| **Acknowledged** | User presses button | (Maintains Color) | ON (If Critical) | OFF (Silenced) |
 
-Alert conditions: T ≤ min_temp OR T ≥ max_temp. Critical threshold provides distinct LED/relay behavior. A cooldown prevents the buzzer from repeating until the set interval elapses.
+*Note: The buzzer only sounds when a **new** alert event occurs or the cooldown timer expires.*
 
 ---
 
 ## 6. Configuration
 
-Adjust these in the sketch:
-- min_temp (default 18.0 °C)
-- max_temp (default 25.0 °C)
-- critical_temp (default 30.0 °C)
-- ALERT_COOLDOWN (default 300000 ms = 5 min)
+You can adjust these values in the header of the sketch:
 
-Relay behavior may be modified (e.g., only trigger on critical, or engage for both low and high conditions). For active‑LOW relay modules, invert logic in `triggerAlert()` and initialization.
+* **`min_temp`**: Lower bound of comfort zone (Default: 18.0°C)
+* **`max_temp`**: Upper bound of comfort zone (Default: 25.0°C)
+* **`critical_temp`**: Danger level, triggers relay (Default: 30.0°C)
+* **`ALERT_COOLDOWN`**: Time in ms before buzzer can sound again (Default: 300,000ms = 5 mins)
 
 ---
 
 ## 7. Build & Run
 
-1. Install Arduino IDE (or PlatformIO).
-2. Install libraries via Library Manager:
-   - OneWire
-   - DallasTemperature
-3. Wire hardware per the pin map.
-4. Open the sketch, verify board = “Arduino Uno”.
-5. Upload.
-6. Open Serial Monitor @ 9600 baud.
-7. Observe temperature and state transitions.
+1.  **Construct the Circuit:** Pay close attention to the Voltage Divider on Pin A1.
+2.  **Open Arduino IDE:** Create a new sketch.
+3.  **Paste Code:** Use the provided sketch below.
+4.  **No Libraries Needed:** This code uses standard C math (`math.h`), so no external library installation is required.
+5.  **Upload:** Connect Uno and upload.
+6.  **Monitor:** Open Serial Monitor (9600 baud) to view real-time Resistance and Temperature data.
 
 ---
 
 ## 8. Provided Sketch
 
 ```cpp
-#include <OneWire.h>              // Include library for OneWire communication (required for DS18B20)
-#include <DallasTemperature.h>    // Include library for Dallas Temperature ICs (DS18B20)
+#include <math.h>
 
-// Pin definitions
-#define ONE_WIRE_BUS 2            // Data pin for DS18B20 sensor connected to Arduino digital pin 2
-const int red_led    = 3;         // Red LED connected to digital pin 3
-const int yellow_led = 4;         // Yellow LED connected to digital pin 4
-const int green_led  = 5;         // Green LED connected to digital pin 5
-const int buzzer     = 6;         // Buzzer connected to digital pin 6
-const int relay_pin  = 7;         // Relay (fan/heater/etc.) connected to digital pin 7
-const int button_pin = 8;         // Button for alert acknowledgement connected to digital pin 8
+// --- Hardware Pins ---
+const int thermistor_output = A1;
+const int red_led = 3;
+const int yellow_led = 4;
+const int green_led = 5;
+const int buzzer = 6;
+const int relay_pin = 7;
+const int button_pin = 8;
 
-// Temperature thresholds (°C)
-float min_temp      = 18.0;
-float max_temp      = 25.0;
+// --- Temperature Thresholds ---
+float min_temp = 18.0;
+float max_temp = 25.0;
 float critical_temp = 30.0;
 
+// --- Alert Variables ---
 bool alert_active = false;
 unsigned long last_alert_time = 0;
-const unsigned long ALERT_COOLDOWN = 300000; // 5 minutes
-
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
+const unsigned long ALERT_COOLDOWN = 300000; 
 
 void setup() {
   Serial.begin(9600);
+  
   pinMode(red_led, OUTPUT);
   pinMode(yellow_led, OUTPUT);
   pinMode(green_led, OUTPUT);
   pinMode(buzzer, OUTPUT);
   pinMode(relay_pin, OUTPUT);
   pinMode(button_pin, INPUT_PULLUP);
-
-  digitalWrite(relay_pin, LOW);   // Ensure relay off at boot
-  sensors.begin();
 }
 
 void loop() {
-  sensors.requestTemperatures();
-  float tempC = sensors.getTempCByIndex(0);
+  // Read analog data and convert to voltage
+  int thermistor_adc_val = analogRead(thermistor_output);
+  double output_voltage = ( (thermistor_adc_val * 5.0) / 1023.0 );
+  
+  // Calculate resistance based on 100k fixed resistor circuit
+  double thermistor_resistance = ( ( 5 * ( 100.0 / output_voltage ) ) - 100 ); 
+  thermistor_resistance = thermistor_resistance * 1000; 
+  
+  // Apply Steinhart-Hart equation to calculate temperature in Celsius
+  double therm_res_ln = log(thermistor_resistance);
+  double tempK = ( 1 / ( 0.001129148 + ( 0.000234125 * therm_res_ln ) + ( 0.0000000876741 * pow(therm_res_ln, 3) ) ) );
+  float tempC = (float)tempK - 273.15;
 
+  // Update hardware indicators and check for alert conditions
   updateLEDStatus(tempC);
   checkTemperatureAlerts(tempC);
 
+  // Check for manual button press to mute the buzzer
   if (digitalRead(button_pin) == LOW) {
     acknowledgeAlert();
-    delay(200); // Basic debounce
+    delay(200); 
   }
 
+  // Print data for serial monitoring
   Serial.print("Temp: ");
   Serial.print(tempC, 2);
-  Serial.println(" C");
+  Serial.print(" C\tResistance: ");
+  Serial.println(thermistor_resistance);
 
   delay(1000);
 }
 
+// --- Helper Functions ---
+
+// Updates LED colors based on temperature thresholds
 void updateLEDStatus(float temp) {
   digitalWrite(red_led, LOW);
   digitalWrite(yellow_led, LOW);
@@ -185,11 +192,9 @@ void updateLEDStatus(float temp) {
   }
 }
 
+// Monitors temperature vs thresholds and handles the alert state machine
 void checkTemperatureAlerts(float temp) {
-  bool should_alert =
-    (temp >= critical_temp) ||
-    (temp >= max_temp) ||
-    (temp <= min_temp);
+  bool should_alert = (temp >= critical_temp || temp >= max_temp || temp <= min_temp);
 
   if (should_alert && !alert_active && (millis() - last_alert_time) > ALERT_COOLDOWN) {
     triggerAlert();
@@ -198,6 +203,7 @@ void checkTemperatureAlerts(float temp) {
   }
 }
 
+// Triggers the audible alarm pattern and activates the relay
 void triggerAlert() {
   alert_active = true;
   last_alert_time = millis();
@@ -208,90 +214,18 @@ void triggerAlert() {
     digitalWrite(buzzer, LOW);
     delay(200);
   }
-
-  digitalWrite(relay_pin, HIGH); // Activate external cooling/heating device
+  digitalWrite(relay_pin, HIGH);
 }
 
+// Deactivates buzzer manually while keeping alert_active logic
 void acknowledgeAlert() {
   alert_active = false;
   digitalWrite(buzzer, LOW);
 }
 
+// Resets alert status and turns off all warning hardware
 void clearAlert() {
   alert_active = false;
   digitalWrite(buzzer, LOW);
   digitalWrite(relay_pin, LOW);
 }
-```
-
----
-
-## 9. Testing Procedure
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Power system & open Serial Monitor | Temperature prints every second |
-| 2 | Idle at nominal temperature | Green LED ON, relay OFF, no buzzer |
-| 3 | Warm sensor above max_temp (e.g., touch) | Yellow LED; after cooldown window if newly triggered → buzzer pulses, relay engages |
-| 4 | Continue heating to ≥ critical_temp | Red LED replaces Yellow; relay remains ON |
-| 5 | Press button during alert | Buzzer silenced (no retrigger until conditions + cooldown) |
-| 6 | Allow sensor to cool into normal band | Alert clears, relay OFF, Green LED resumes |
-| 7 | Re‑trigger before cooldown ends | No buzzer until cooldown elapsed |
-
----
-
-## 10. Improvement Opportunities
-
-| Category | Enhancement | Benefit |
-|----------|-------------|---------|
-| Timing | Replace blocking delays with millis() scheduling | Enables multitasking (logging, UI) |
-| Robustness | Detect sensor disconnect (`DEVICE_DISCONNECTED_C`) | Fail-safe behavior |
-| Persistence | Store thresholds in EEPROM | Retain settings across resets |
-| Precision | Add moving average / hysteresis | Reduces false oscillations |
-| Hardware | Add fuse, enclosure, strain relief | Deployment readiness |
-| UI | Add OLED / LCD readout | Local visibility |
-| Data | SD card / CSV logging | Historical analysis |
-| Networking | Offload to ESP8266/ESP32 (HTTP/MQTT) | Remote monitoring |
-| Multi-sensor | Enumerate all DS18B20 devices | Multi-point thermal profiling |
-| Reliability | Enable watchdog timer | Automatic recovery |
-
----
-
-## 11. Safety Notes
-
-- When switching mains voltage, use properly rated relay modules, enclosures, and observe creepage/clearance.  
-- Never power high-voltage loads on an open breadboard.  
-- For inductive loads (motors, solenoids), ensure the relay module includes proper flyback protection (diode or snubber).  
-- Maintain solid ground reference and avoid long, noise-prone sensor wiring without shielding.
-
----
-
-## 12. License (MIT)
-
-```
-MIT License
-
-Copyright (c) 2025 d-souptik24
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-```
-
----
-
-For production use, consider implementing non‑blocking timing, watchdog protection, and EEPROM-backed configuration as early enhancements.
