@@ -1,108 +1,119 @@
-#include <OneWire.h>              // Include library for OneWire communication (required for DS18B20)
-#include <DallasTemperature.h>     // Include library for Dallas Temperature ICs (DS18B20)
+#include <math.h>
 
-// Pin definitions
-#define ONE_WIRE_BUS 2            // Data pin for DS18B20 sensor connected to Arduino digital pin 2
-const int red_led = 3;            // Red LED connected to digital pin 3
-const int yellow_led = 4;         // Yellow LED connected to digital pin 4
-const int green_led = 5;          // Green LED connected to digital pin 5
-const int buzzer = 6;             // Buzzer connected to digital pin 6
-const int relay_pin = 7;          // Relay (for fan/heater/etc.) connected to digital pin 7
-const int button_pin = 8;         // Button for alert acknowledgement connected to digital pin 8
+// --- Hardware Pins ---
+const int thermistor_output = A1;
+const int red_led = 3;
+const int yellow_led = 4;
+const int green_led = 5;
+const int buzzer = 6;
+const int relay_pin = 7;
+const int button_pin = 8;
 
-// Temperature thresholds
-float min_temp = 18.0;            // Minimum temperature threshold in Celsius
-float max_temp = 25.0;            // Maximum temperature threshold in Celsius
-float critical_temp = 30.0;       // Critical temperature threshold in Celsius
+// --- Temperature Thresholds ---
+float min_temp = 18.0;
+float max_temp = 25.0;
+float critical_temp = 30.0;
 
-bool alert_active = false;        // Track if an alert is currently active
-unsigned long last_alert_time = 0;// Store the last alert time (for cooldown)
-const unsigned long ALERT_COOLDOWN = 300000; // Minimum time between alerts (5 minutes in milliseconds)
-
-// Initialize OneWire instance for DS18B20
-OneWire oneWire(ONE_WIRE_BUS);    // Create a OneWire object using the specified pin
-DallasTemperature sensors(&oneWire); // Create DallasTemperature object, passing the OneWire reference
+// --- Alert Variables ---
+bool alert_active = false;
+unsigned long last_alert_time = 0;
+const unsigned long ALERT_COOLDOWN = 300000; // 5 minutes
 
 void setup() {
-  Serial.begin(9600);             // Start serial communication at 9600 baud for debugging
-  pinMode(red_led, OUTPUT);       // Set red LED pin as output
-  pinMode(yellow_led, OUTPUT);    // Set yellow LED pin as output
-  pinMode(green_led, OUTPUT);     // Set green LED pin as output
-  pinMode(buzzer, OUTPUT);        // Set buzzer pin as output
-  pinMode(relay_pin, OUTPUT);     // Set relay pin as output
-  pinMode(button_pin, INPUT_PULLUP); // Set button pin as input with pull-up resistor
-
-  sensors.begin();                // Start the DS18B20 sensor library
+  Serial.begin(9600);
+  
+  pinMode(red_led, OUTPUT);
+  pinMode(yellow_led, OUTPUT);
+  pinMode(green_led, OUTPUT);
+  pinMode(buzzer, OUTPUT);
+  pinMode(relay_pin, OUTPUT);
+  pinMode(button_pin, INPUT_PULLUP);
 }
 
 void loop() {
-  sensors.requestTemperatures();  // Request temperature from all DS18B20 sensors on the bus
-  float tempC = sensors.getTempCByIndex(0); // Read temperature from the first sensor (index 0)
+  // 1. ORIGINAL NTC LOGIC
+  int thermistor_adc_val = analogRead(thermistor_output);
+  double output_voltage = ( (thermistor_adc_val * 5.0) / 1023.0 );
+  
+  // Using specific 100k fixed resistor formula
+  double thermistor_resistance = ( ( 5 * ( 100.0 / output_voltage ) ) - 100 ); /* K-Ohms */
+  thermistor_resistance = thermistor_resistance * 1000; /* Ohms */
+  
+  double therm_res_ln = log(thermistor_resistance);
+  
+  /* Steinhart-Hart: 1 / (A + B[ln(R)] + C[ln(R)]^3) */
+  double tempK = ( 1 / ( 0.001129148 + ( 0.000234125 * therm_res_ln ) + ( 0.0000000876741 * pow(therm_res_ln, 3) ) ) );
+  float tempC = (float)tempK - 273.15;
 
-  updateLEDStatus(tempC);         // Update LED indicators based on temperature
-  checkTemperatureAlerts(tempC);  // Check if temperature is outside thresholds and manage alerts
+  
+  updateLEDStatus(tempC);
+  checkTemperatureAlerts(tempC);
 
-  if (digitalRead(button_pin) == LOW) { // If the button is pressed (LOW because of pull-up)
-    acknowledgeAlert();           // Call the function to acknowledge and clear alert
-    delay(200);                   // Debounce delay to prevent multiple triggers
+  if (digitalRead(button_pin) == LOW) {
+    acknowledgeAlert();
+    delay(200); // Simple debounce
   }
 
-  Serial.print("Temp: ");         // Print label to Serial Monitor
-  Serial.print(tempC, 2);         // Print temperature value with 2 decimal places
-  Serial.println(" C");           // Print unit and newline
+  // Debugging
+  Serial.print("Temp: ");
+  Serial.print(tempC, 2);
+  Serial.print(" C\tResistance: ");
+  Serial.println(thermistor_resistance);
 
-  delay(1000);                    // Wait 1 second before next reading
+  delay(1000);
 }
 
+// --- Helper Functions ---
+
+// Updates LED colors based on temperature thresholds
 void updateLEDStatus(float temp) {
-  digitalWrite(red_led, LOW);     // Turn off red LED
-  digitalWrite(yellow_led, LOW);  // Turn off yellow LED
-  digitalWrite(green_led, LOW);   // Turn off green LED
+  digitalWrite(red_led, LOW);
+  digitalWrite(yellow_led, LOW);
+  digitalWrite(green_led, LOW);
 
-  if (temp >= critical_temp)      // If temperature is at or above critical threshold
-    digitalWrite(red_led, HIGH);  // Turn on red LED
-  else if (temp >= max_temp || temp <= min_temp) // If temp is above max OR below min
-    digitalWrite(yellow_led, HIGH); // Turn on yellow LED
-  else
-    digitalWrite(green_led, HIGH); // Otherwise, temperature is normal, turn on green LED
+  if (temp >= critical_temp) {
+    digitalWrite(red_led, HIGH);
+  } else if (temp >= max_temp || temp <= min_temp) {
+    digitalWrite(yellow_led, HIGH);
+  } else {
+    digitalWrite(green_led, HIGH);
+  }
 }
 
+// Monitors temperature vs thresholds and handles the alert state machine
 void checkTemperatureAlerts(float temp) {
-  bool should_alert = false;      // Initialize flag for alert status
+  bool should_alert = (temp >= critical_temp || temp >= max_temp || temp <= min_temp);
 
-  // If temp is at/above critical, above max, or below min, set should_alert true
-  if (temp >= critical_temp || temp >= max_temp || temp <= min_temp) {
-    should_alert = true;
-  }
-
-  // If alert should be triggered and not active and cooldown elapsed
   if (should_alert && !alert_active && (millis() - last_alert_time) > ALERT_COOLDOWN) {
-    triggerAlert();               // Trigger alert sequence
-  } else if (!should_alert && alert_active) { // If temperature normal and alert is active
-    clearAlert();                 // Clear the alert
+    triggerAlert();
+  } else if (!should_alert && alert_active) {
+    clearAlert();
   }
 }
 
+// Triggers the audible alarm pattern and activates the relay
 void triggerAlert() {
-  alert_active = true;            // Set alert_active flag
-  last_alert_time = millis();     // Record the time alert was triggered
+  alert_active = true;
+  last_alert_time = millis();
 
-  for (int i = 0; i < 3; i++) {  // Repeat buzzer pattern 3 times
-    digitalWrite(buzzer, HIGH);   // Turn on buzzer
-    delay(200);                   // Wait 200ms
-    digitalWrite(buzzer, LOW);    // Turn off buzzer
-    delay(200);                   // Wait 200ms
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(buzzer, HIGH);
+    delay(200);
+    digitalWrite(buzzer, LOW);
+    delay(200);
   }
-  digitalWrite(relay_pin, HIGH);  // Turn on relay to activate external device (e.g., fan)
+  digitalWrite(relay_pin, HIGH);
 }
 
+// Deactivates buzzer manually while keeping alert_active logic
 void acknowledgeAlert() {
-  alert_active = false;           // Reset alert flag
-  digitalWrite(buzzer, LOW);      // Ensure buzzer is off
+  alert_active = false;
+  digitalWrite(buzzer, LOW);
 }
 
+// Resets alert status and turns off all warning hardware
 void clearAlert() {
-  alert_active = false;           // Reset alert flag
-  digitalWrite(buzzer, LOW);      // Ensure buzzer is off
-  digitalWrite(relay_pin, LOW);   // Turn off relay (deactivate external device)
+  alert_active = false;
+  digitalWrite(buzzer, LOW);
+  digitalWrite(relay_pin, LOW);
 }
